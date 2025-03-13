@@ -69,7 +69,13 @@ class DNSClient:
         offset = 12
         # Skip question name
         while response[offset] != 0:
-            offset += 1
+            if (response[offset] & 0xC0) == 0xC0:
+                # The pointer is in the lower 14 bits of the two bytes
+                pointer = ((response[offset] & 0x3F) << 8) | response[offset + 1]
+                # You would need to follow this pointer to get the actual name
+                offset += 2
+            else:
+                offset += 1
         offset += 5  # Skip null byte, qtype, and qclass
         
         # Parse answers
@@ -89,12 +95,15 @@ class DNSClient:
             
             # Get IP address if it's an A record
             if ans_type == 1:  # A record
-                ip = '.'.join(str(x) for x in response[offset:offset+rdlength])
+                ip = '.'.join(str(b) for b in response[offset:offset+rdlength])
                 answers.append(ip)
             
             offset += rdlength
             
         return answers
+
+    def __del__(self):
+        self.socket.close()
 
 def main():
     client = DNSClient()

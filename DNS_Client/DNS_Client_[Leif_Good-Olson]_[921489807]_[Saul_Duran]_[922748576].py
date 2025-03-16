@@ -2,6 +2,8 @@ import socket
 import struct
 import random
 import time
+import http.client
+import ssl
 
 class DNSClient:
     def __init__(self, server="8.8.8.8", port=53):
@@ -65,7 +67,7 @@ class DNSClient:
         header = struct.unpack('!HHHHHH', response[:12])
         ancount = header[3]  # Number of answers
         
-        # Skip header and question section
+        # Skip header
         offset = 12
         # Skip question name
         while response[offset] != 0:
@@ -93,37 +95,113 @@ class DNSClient:
             ans_type, ans_class, ttl, rdlength = struct.unpack('!HHIH', response[offset:offset+10])
             offset += 10
             
-            # Get IP address if it's an A record
+            # Process different record types
             if ans_type == 1:  # A record
                 ip = '.'.join(str(b) for b in response[offset:offset+rdlength])
-                answers.append(ip)
+                answers.append(('A', ip))
+            elif ans_type == 2:  # NS record
+                ns_name = self._extract_name(response, offset)
+                answers.append(('NS', ns_name))
+            elif ans_type == 5:  # CNAME record
+                cname = self._extract_name(response, offset)
+                answers.append(('CNAME', cname))
+            elif ans_type == 15:  # MX record
+                preference = struct.unpack('!H', response[offset:offset+2])[0]
+                mx_name = self._extract_name(response, offset+2)
+                answers.append(('MX', f"{preference} {mx_name}"))
+            elif ans_type == 16:  # TXT record
+                txt_len = response[offset]
+                txt_data = response[offset+1:offset+1+txt_len].decode('utf-8', errors='ignore')
+                answers.append(('TXT', txt_data))
+            elif ans_type == 28:  # AAAA record
+                ipv6 = ':'.join(f"{response[offset+i*2]*256+response[offset+i*2+1]:x}" for i in range(8))
+                answers.append(('AAAA', ipv6))
+            else:
+                answers.append((f'TYPE{ans_type}', f'<data length: {rdlength}>'))
             
             offset += rdlength
             
         return answers
+        
+    def _extract_name(self, response, offset):
+        """Helper method to extract domain names from DNS responses."""
+        name = ""
+        # Check if it's a pointer
+        if (response[offset] & 0xC0) == 0xC0:
+            pointer = ((response[offset] & 0x3F) << 8) | response[offset + 1]
+            name = self._extract_name(response, pointer)
+            return name
+        
+        # Regular name extraction
+        current_offset = offset
+        while response[current_offset] != 0:
+            if (response[current_offset] & 0xC0) == 0xC0:
+                pointer = ((response[current_offset] & 0x3F) << 8) | response[current_offset + 1]
+                name += self._extract_name(response, pointer)
+                break
+            else:
+                length = response[current_offset]
+                current_offset += 1
+                name += response[current_offset:current_offset+length].decode('utf-8', errors='ignore') + '.'
+                current_offset += length
+        
+        if name and name[-1] == '.':
+            name = name[:-1]
+        
+        return name
 
-    def __del__(self):
-        self.socket.close()
 
 def main():
     client = DNSClient()
     domains = [
-        "google.com",
-        "facebook.com",
-        "youtube.com",
-        "baidu.com",
-        "wikipedia.org"
+        "www.google.com",
+        "www.wikipedia.org"
     ]
     
-    print("Domain Name\tIP Addresses\tRTT (ms)")
-    print("-" * 50)
+    print("Domain Name\tRecord Type\tRecord Data\tRTT (ms)")
+    print("-" * 70)
     
     for domain in domains:
         answers, rtt = client.send_query(domain)
         if answers:
-            print(f"{domain}\t{', '.join(answers)}\t{rtt:.2f}")
+            for record_type, record_data in answers:
+                print(f"{domain}\t{record_type}\t{record_data}\t{rtt:.2f}")
+            
+            # HTTPS Request 
+            try:
+                # Get the first A record IP address
+                ip_address = None
+                for record_type, record_data in answers:
+                    if record_type == 'A':
+                        ip_address = record_data
+                        break
+                
+                if ip_address:
+                    # Create a TCP socket
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(5)
+                    sock.connect((ip_address, 443))
+                    
+                    # Create an HTTP connection using the IP address
+                    conn = http.client.HTTPSConnection(ip_address)
+                    
+                    # Send the request with proper Host header
+                    conn.request("GET", "/", headers={"Host": domain})
+                    
+                    # Get and print the response
+                    response = conn.getresponse()
+                    print(f"HTTPS Response for {domain}: {response.status} {response.reason}")
+                    
+                    # Close the connection
+                    conn.close()
+                else:
+                    print(f"No A record found for {domain}, cannot make HTTPS request")
+            except Exception as e:
+                print(f"HTTPS Request Error for {domain}: {e}")
         else:
-            print(f"{domain}\tTimeout\tN/A")
+            print(f"{domain}\tN/A\tTimeout\tN/A")
+            print(f"HTTPS Request for {domain}: Not attempted (DNS resolution failed)")
+
 
 if __name__ == "__main__":
     main()

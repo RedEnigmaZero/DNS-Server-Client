@@ -9,7 +9,7 @@ class DNSClient:
         self.server = server
         self.port = port
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.socket.settimeout(10)  # 5 second timeout
+        self.socket.settimeout(10)  # 10 second timeout
 
     def create_dns_header(self):
         ID = random.randint(0, 65535)
@@ -71,9 +71,6 @@ class DNSClient:
         # Skip question name
         while response[offset] != 0:
             if (response[offset] & 0xC0) == 0xC0:
-                # The pointer is in the lower 14 bits of the two bytes
-                pointer = ((response[offset] & 0x3F) << 8) | response[offset + 1]
-                # You would need to follow this pointer to get the actual name
                 offset += 2
             else:
                 offset += 1
@@ -94,6 +91,7 @@ class DNSClient:
             ans_type, ans_class, ttl, rdlength = struct.unpack('!HHIH', response[offset:offset+10])
             offset += 10
             
+            
             # Process different record types
             if ans_type == 1:  # A record
                 ip = '.'.join(str(b) for b in response[offset:offset+rdlength])
@@ -105,10 +103,12 @@ class DNSClient:
                 cname = self._extract_name(response, offset)
                 answers.append(('CNAME', cname))
             elif ans_type == 15:  # MX record
+                # Extract preference and MX name
                 preference = struct.unpack('!H', response[offset:offset+2])[0]
                 mx_name = self._extract_name(response, offset+2)
                 answers.append(('MX', f"{preference} {mx_name}"))
             elif ans_type == 16:  # TXT record
+                # Extract TXT data
                 txt_len = response[offset]
                 txt_data = response[offset+1:offset+1+txt_len].decode('utf-8', errors='ignore')
                 answers.append(('TXT', txt_data))
@@ -124,7 +124,7 @@ class DNSClient:
         
     def _extract_name(self, response, offset):
         name = ""
-        # Check if it's a pointer
+        # Check for compression
         if (response[offset] & 0xC0) == 0xC0:
             pointer = ((response[offset] & 0x3F) << 8) | response[offset + 1]
             name = self._extract_name(response, pointer)
@@ -183,12 +183,20 @@ def main():
                     # Create an HTTP connection using the IP address
                     conn = http.client.HTTPConnection(ip_address)
                     
+                    # Measure HTTP RTT
+                    http_start_time = time.time()
+                    
                     # Send the request with proper Host header
                     conn.request("GET", "/", headers={"Host": domain})
                     
                     # Get and print the response
                     response = conn.getresponse()
-                    print(f"HTTPS Response for {domain}: {response.status} {response.reason}")
+                    
+                    # Calculate HTTP RTT
+                    http_end_time = time.time()
+                    http_rtt = (http_end_time - http_start_time) * 1000  # Convert to milliseconds
+                    
+                    print(f"HTTPS Response for {domain}: {response.status} {response.reason} {http_rtt:.2f} ms")
                     
                     # Close the connection
                     conn.close()

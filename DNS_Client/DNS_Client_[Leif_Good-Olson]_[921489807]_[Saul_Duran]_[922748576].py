@@ -3,14 +3,13 @@ import struct
 import random
 import time
 import http.client
-import ssl
 
 class DNSClient:
     def __init__(self, server="8.8.8.8", port=53):
         self.server = server
         self.port = port
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.socket.settimeout(5)  # 5 second timeout
+        self.socket.settimeout(10)  # 5 second timeout
 
     def create_dns_header(self):
         ID = random.randint(0, 65535)
@@ -124,7 +123,6 @@ class DNSClient:
         return answers
         
     def _extract_name(self, response, offset):
-        """Helper method to extract domain names from DNS responses."""
         name = ""
         # Check if it's a pointer
         if (response[offset] & 0xC0) == 0xC0:
@@ -167,7 +165,7 @@ def main():
             for record_type, record_data in answers:
                 print(f"{domain}\t{record_type}\t{record_data}\t{rtt:.2f}")
             
-            # HTTPS Request 
+            # HTTP Request 
             try:
                 # Get the first A record IP address
                 ip_address = None
@@ -183,7 +181,7 @@ def main():
                     sock.connect((ip_address, 443))
                     
                     # Create an HTTP connection using the IP address
-                    conn = http.client.HTTPSConnection(ip_address)
+                    conn = http.client.HTTPConnection(ip_address)
                     
                     # Send the request with proper Host header
                     conn.request("GET", "/", headers={"Host": domain})
